@@ -87,7 +87,7 @@ void tlc_set(int channel, int progress) {
 
   // If Vs is tied to Vcc and the TLC output is pulled high via a resistor to Vcc then 
   // the progress is reversed. ie TLC_MAX_PWM closes the MOSFET
-  //progress = 100 - progress;
+  progress = 100 - progress;
   
   switch (RAMP_FUNC) {
     case CUBIC:
@@ -131,7 +131,7 @@ void loop() {
     // For each stair
     for (jj=TOP_STAIR; jj <= BOTTOM_STAIR; jj+=1) {
           // Ramp UP      
-          for (ii=0; ii < 100; ii+=ramp_step) { 
+          for (ii=0; ii <= 100; ii+=ramp_step) { 
             // change the analog out value:
             Serial.print(ii);
             Serial.print('\t');
@@ -148,7 +148,7 @@ void loop() {
     // For each stair
     for (int jj=TOP_STAIR; jj <= BOTTOM_STAIR; jj+=1) {
           // Ramp DOWN      
-          for (ii=100; ii > min_ii; ii-=ramp_step) { 
+          for (ii=100; ii >= min_ii; ii-=ramp_step) { 
             // change the analog out value:
             Serial.print(ii);
             Serial.print('\t');
