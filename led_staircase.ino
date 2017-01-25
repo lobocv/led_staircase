@@ -22,6 +22,15 @@ Arduino pin 3 -> GSCLK (TLC pin 18)
 
 
 /************************************************\
+                    CONFIG
+\*************************************************/
+const int STAY_ON_TIME_SEC = 10;
+const int STEP_DELAY_MILLISEC = 0;
+const int RAMP_DELAY_MILLISEC = 25;
+const int RAMP_FUNC = 0;                  // 0 - cubic, 1 - linear
+const int MAX_BRIGHTNESS_PERCENT = 50;
+
+/************************************************\
                     GLOBALS
 \*************************************************/
 const int TLC_MAX_PWM = 4095;
@@ -53,15 +62,6 @@ const int BOTTOM_STAIR = 1;
 \*************************************************/
 const int digitalInPin = 6;  // Digital input pin that the motion sensor or switch is attached to
 
-
-
-/************************************************\
-                    CONFIG
-\*************************************************/
-const int STAY_ON_TIME = 0;
-const int STEP_DELAY = 0;
-const int RAMP_DELAY = 25;
-const int RAMP_FUNC = 0;            // 0 - cubic, 1 - linear
 
 
 int cubic_func(float x, int scale) {
@@ -131,33 +131,33 @@ void loop() {
     // For each stair
     for (jj=TOP_STAIR; jj <= BOTTOM_STAIR; jj+=1) {
           // Ramp UP      
-          for (ii=0; ii <= 100; ii+=ramp_step) { 
+          for (ii=0; ii <= MAX_BRIGHTNESS_PERCENT; ii+=ramp_step) { 
             // change the analog out value:
             Serial.print(ii);
             Serial.print('\t');
 //            Serial.print(pwm_value);
 //            Serial.println();
             tlc_set(jj, ii);       
-            delay(RAMP_DELAY);  
+            delay(RAMP_DELAY_MILLISEC);  
           };
-      delay(STEP_DELAY);  
+      delay(STEP_DELAY_MILLISEC);  
     };
     
-    delay(STAY_ON_TIME);
+    delay(1000 * STAY_ON_TIME_SEC);
     
     // For each stair
     for (int jj=TOP_STAIR; jj <= BOTTOM_STAIR; jj+=1) {
           // Ramp DOWN      
-          for (ii=100; ii >= min_ii; ii-=ramp_step) { 
+          for (ii=MAX_BRIGHTNESS_PERCENT; ii >= min_ii; ii-=ramp_step) { 
             // change the analog out value:
             Serial.print(ii);
             Serial.print('\t');
 //            Serial.print(pwm_value);
 //            Serial.println();
             tlc_set(jj, ii);       
-            delay(RAMP_DELAY);  
+            delay(RAMP_DELAY_MILLISEC);  
           };
-      delay(STEP_DELAY);  
+      delay(STEP_DELAY_MILLISEC);  
     };
  
     // Reset the flag so the animation doesn't run again until it is tripped.    
