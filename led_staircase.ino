@@ -1,172 +1,308 @@
+//#define DEBUG
 
-/*
-LED Stair Case Project:
-
-Up to 16 LED strips can be controlled using the Arduino and TLC5940NT PWM IC. THE TLC5940 allows for 16 PWM channel expansion.
-A motion activated sensor at the top and bottom stair trigger a cascading LED effect which lights up each stair for a set
-amount of time and then turns off.
-
-See TLC tutorial here: http://tronixstuff.com/2013/10/21/tutorial-arduino-tlc5940-led-driver-ic/
-                       http://www.learningaboutelectronics.com/Articles/TLC5940-PWM-driver-circuit-with-an-arduino.php
-                       
-Arduino pin 13 -> SCLK (TLC pin 25)
-Arduino pin 11 -> SIN (TLC pin 26)
-Arduino pin 10 -> Blank (TLC pin 23)
-Arduino pin 9 -> XLAT (TLC pin 24)
-Arduino pin 3 -> GSCLK (TLC pin 18)
+#ifdef DEBUG
+ #define DEBUG_PRINT(x)  Serial.println (x)
+#else
+ #define DEBUG_PRINT(x)
+#endif
 
 
-*/
 
-#include "Tlc5940.h"
+/************************************************\
+                    DEFINITIONS
+\*************************************************/
+const int TAPERED = 0;
+const int LINEAR = 1;
+const int QUADRATIC = 2;
 
+const int PIR_SENSOR = 0;
+const int ULTRASONIC_SENSOR = 1;
 
 /************************************************\
                     CONFIG
 \*************************************************/
-const int STAY_ON_TIME_SEC = 10;
-const int STEP_DELAY_MILLISEC = 0;
-const int RAMP_DELAY_MILLISEC = 25;
-const int RAMP_FUNC = 0;                  // 0 - cubic, 1 - linear
-const int MAX_BRIGHTNESS_PERCENT = 50;
+const int STAY_ON_TIME_SEC         = 10;        // How long to stay on before ramp down sequence
+const int STEP_DELAY_MILLISEC      = 0;         // Delay between steps turning on
+const int RAMP_DELAY_UP_MILLISEC   = 10;        // How long between LED brightness increases
+const int RAMP_DELAY_DOWN_MILLISEC = 10;        // How long between LED brightness decreases
+const int RAMP_FUNC                = QUADRATIC; // Ramping function
+const int RAMP_UP_STEP             = 1;         // How much to increase brightness on each step 
+const int RAMP_DOWN_STEP           = 1;         // How much to decrease brightness on each step
+const int OVERLAP                  = 3;         // The amount of overlapping between stairs turning on/off
+
+const float MAX_BRIGHTNESS_PERCENT = 1.0;       // Maximum brightness reached by the LEDs
+const float MIN_BRIGHTNESS_PERCENT = 0;         // Minimum brightness reached by the LEDs
+
+const int PULSE_LENGTH_uS          = 50;        // Length of the ultra-sonic pulse
+const int TRIGGER_DISTANCE_BOT_CM  = 80;        // Trigger LED when less than this distance at the bottom sensor
+const int TRIGGER_DISTANCE_TOP_CM  = 80;        // Trigger LED when less than this distance at the top sensor
+
+const int SENSOR_TYPE = PIR_SENSOR;
 
 /************************************************\
-                    GLOBALS
+                    Arduino Mappings
 \*************************************************/
-const int TLC_MAX_PWM = 4095;
-const int CUBIC = 0;
-const int LINEAR = 1;
+
+// top and bottom of stairs trigger (in) pins for Passive IR sensor
+const int PIRPinTop = 50;
+const int PIRPinBot = 51;
+
+// top and bottom of stairs trigger (Out) and echo (in) pins for Ultra-sonic sensor
+const int echoPinTop = 50;  
+const int trigPinTop = 51;  
+
+const int echoPinBot = 48;  
+const int trigPinBot = 49;  
+
+// Mapping of output pins to LEDs
+const int STAIR_01 = 44;    
+const int STAIR_02 = 3;
+const int STAIR_03 = 4;
+const int STAIR_04 = 5;
+const int STAIR_05 = 6;
+const int STAIR_06 = 7;
+const int STAIR_07 = 8;
+const int STAIR_08 = 9;
+const int STAIR_09 = 10;
+const int STAIR_10 = 11;
+const int STAIR_11 = 12;
+const int STAIR_12 = 13;
+
+const int N_STAIRS = 12;
+int STAIRS[N_STAIRS] = {STAIR_01, STAIR_02, STAIR_03, STAIR_04, STAIR_05, STAIR_06, STAIR_07, STAIR_08, STAIR_09, STAIR_10, STAIR_11, STAIR_12};
+int TOP_STAIR = STAIRS[0];
+int BOTTOM_STAIR = STAIRS[N_STAIRS-1];
+
 
 
 /************************************************\
-                    TLC5940NT
+                    SETUP
 \*************************************************/
-// Mapping of TLC Outputs to stairs
-const int STAIR_01 = 1;    // Top stair
-const int STAIR_02 = 2;
-const int STAIR_03 = 3;
-const int STAIR_04 = 4;
-const int STAIR_05 = 5;
-const int STAIR_06 = 6;
-const int STAIR_07 = 7;
-const int STAIR_08 = 8;
-const int STAIR_09 = 9;
-const int STAIR_10 = 10;
-const int STAIR_11 = 11;
-const int STAIR_12 = 12;    // Bottom stair
-const int TOP_STAIR = 1;
-const int BOTTOM_STAIR = 1;
-
-/************************************************\
-                    Arduino
-\*************************************************/
-const int digitalInPin = 6;  // Digital input pin that the motion sensor or switch is attached to
-
-
-
-int cubic_func(float x, int scale) {
-   // Convert animation progress to cubic smoothing function value
-   // x:     0 <= x <= 1
-   // scale: Maximum value of smoothing function, ie. smooth_func(1) 
-   float q = float(x) / 100.0;
-   return (3*q*q - 2 * q*q*q) * scale;
-}
-
-int linear_func(float x, int scale){
-   // Convert animation progress to linear smoothing function value
-   // x:     0 <= x <= 1
-   // scale: Maximum value of smoothing function, ie. smooth_func(1) 
-  int y;
-  y = map(x, 0, 100, 0, scale);     
-  return y;
-}
-
-
-void tlc_set(int channel, int progress) {
-  int pwm_value;
-
-  // If Vs is tied to Vcc and the TLC output is pulled high via a resistor to Vcc then 
-  // the progress is reversed. ie TLC_MAX_PWM closes the MOSFET
-  progress = 100 - progress;
-  
-  switch (RAMP_FUNC) {
-    case CUBIC:
-      pwm_value = cubic_func(progress, TLC_MAX_PWM);
-    case LINEAR:
-      pwm_value = linear_func(progress, TLC_MAX_PWM);      
-  } 
-  Tlc.set(channel, pwm_value);
-  Tlc.update();
-}
-
 void setup() {
-  Tlc.init(TLC_MAX_PWM);
-  delay(5000);
+  delay(1000);
   
+  #ifdef DEBUG
   Serial.begin(9600);
-  // Initialize the pushbutton pin as an input:
-  pinMode(digitalInPin, INPUT);  
+  #endif
+  
+  if (SENSOR_TYPE == ULTRASONIC_SENSOR) {
+    // Set up pin modes
+    pinMode(echoPinTop, INPUT);  
+    pinMode(echoPinBot, INPUT);  
+    pinMode(trigPinTop, OUTPUT);  
+    pinMode(trigPinBot, OUTPUT);
+  } else if (SENSOR_TYPE == PIR_SENSOR) {
+    pinMode(PIRPinTop, INPUT);
+    pinMode(PIRPinBot, INPUT);
+  }
+  
+  for (int ii=0; ii < N_STAIRS; ii++) {
+    pinMode(STAIRS[ii], OUTPUT);
+  }
 }
 
 
-
-
+/************************************************\
+                    Main
+\*************************************************/
 
 void loop() {
-  int min_ii=0;
-  int ii=min_ii;
-  int jj=0;
-  int trip=0;
-  boolean running=false;
-  int ramp_step=1;
-  int pwm_value=0;
+  int trip;
+
+  trip = is_tripped();
   
-  // Check if the sensor was tripped
-  trip = digitalRead(digitalInPin);
-  Serial.println(trip);
-//  // LED turn on / off sequence
-  if (trip == 1) {
-    Serial.println("start");    
+  if (trip != 0) {
     
-    // For each stair
-    for (jj=TOP_STAIR; jj <= BOTTOM_STAIR; jj+=1) {
-          // Ramp UP      
-          for (ii=0; ii <= MAX_BRIGHTNESS_PERCENT; ii+=ramp_step) { 
-            // change the analog out value:
-            Serial.print(ii);
-            Serial.print('\t');
-//            Serial.print(pwm_value);
-//            Serial.println();
-            tlc_set(jj, ii);       
-            delay(RAMP_DELAY_MILLISEC);  
-          };
-      delay(STEP_DELAY_MILLISEC);  
-    };
+    // Set the direction in which the LEDS turn on
+    if (trip > 0) {
+      DEBUG_PRINT ("Starting sequence from Top Stair");    
+    } else {
+      DEBUG_PRINT ("Starting sequence from Bottom Stair");    
+    }
+ 
+    rampUpFlight();
     
     delay(1000 * STAY_ON_TIME_SEC);
     
-    // For each stair
-    for (int jj=TOP_STAIR; jj <= BOTTOM_STAIR; jj+=1) {
-          // Ramp DOWN      
-          for (ii=MAX_BRIGHTNESS_PERCENT; ii >= min_ii; ii-=ramp_step) { 
-            // change the analog out value:
-            Serial.print(ii);
-            Serial.print('\t');
-//            Serial.print(pwm_value);
-//            Serial.println();
-            tlc_set(jj, ii);       
-            delay(RAMP_DELAY_MILLISEC);  
-          };
-      delay(STEP_DELAY_MILLISEC);  
-    };
+    rampDownFlight();
  
-    // Reset the flag so the animation doesn't run again until it is tripped.    
-    trip = 0;
-    Serial.println("done");
-  } // endif (trip == 1)
-  else {
-     Serial.println("No input detected");  
+    DEBUG_PRINT ("Finished sequence");
+  } else {
+    DEBUG_PRINT ("No input detected");
   };
 
-   delay(100);                    
+}
+
+
+/************************************************\
+                    LIBRARY
+\*************************************************/
+
+bool _rampUpDone(int ii, int extent) {
+  return ii < extent;
+}
+
+bool _rampDownDone(int ii, int extent) {
+  return ii > extent;
+}
+
+// Iterate over a group of stairs like a box-car filter, incrementing or decrementing
+// their brightness
+void _rampFlight(int direction) {
+  bool (*iterating)(int, int) ;
+  int brightness_overlap = 100 / OVERLAP;
+  int extent = (N_STAIRS+OVERLAP)*100;
+  int ii, end, brightness, upto, gofrom, sleep;
+  
+  
+  if (direction > 0) {
+    ii = 0;
+    end = extent;
+    iterating = _rampUpDone;
+    sleep= RAMP_DELAY_UP_MILLISEC;
+    direction = RAMP_UP_STEP;
+  } else if (direction < 0) {
+    ii = extent;
+    end = N_STAIRS * 100 -  extent;
+    iterating = _rampDownDone;
+    sleep = RAMP_DELAY_DOWN_MILLISEC;
+    direction = -RAMP_DOWN_STEP;
+  }
+  
+  while (iterating(ii, end)) {
+    
+    upto = (ii / brightness_overlap);
+    gofrom = upto - OVERLAP;
+    if (gofrom < 0) {
+      gofrom = 0;
+    }
+    if (upto > N_STAIRS-1) {
+      upto = N_STAIRS-1;
+    }
+    
+    for (int step=gofrom; step <= upto; step++) {
+      brightness = ii - step * brightness_overlap;
+
+      if ((brightness < 0) || (brightness > 100)) {
+        continue;
+      }
+
+      setBrightness(STAIRS[step], brightness);  
+      delay(sleep);    
+      
+    }
+    
+    ii += direction;
+  }
+
+  
+}
+
+
+void rampUpFlight() {
+  _rampFlight(1);
+}
+
+void rampDownFlight() {
+  _rampFlight(-1);
+}
+
+
+void setBrightness(int pin, int progress) {
+  int pwm_value, _max;
+  if (progress < 0) {
+    progress = 0;
+  } else if (progress > 100) {
+    progress = 100;
+  }
+  
+  _max = MAX_BRIGHTNESS_PERCENT * 255;
+  switch (RAMP_FUNC) {
+    case QUADRATIC:
+      pwm_value = quadratic_func(progress, _max);
+    case TAPERED:
+      pwm_value = tapered_func(progress, _max);
+    case LINEAR:
+      pwm_value = linear_func(progress, _max);      
+  } 
+  
+  DEBUG_PRINT ("Progress = " + String(progress) + ": Setting channel " + String(pin) + " to " + String(pwm_value) + "\n");
+  analogWrite(pin, pwm_value); 
+
+}
+
+int quadratic_func(int progress, int scale) {
+   float q = float(progress) / 100.0;
+   return q*q * scale;
+}
+
+int tapered_func(int progress, int scale) {
+   float q = float(progress) / 100.0;
+   return (3*q*q - 2 * q*q*q) * scale;
+}
+
+int linear_func(int progress, int scale) {
+  int y;
+  y = map(progress, 0, 100, 0, scale);     
+  return y;
+}
+
+void sendPulse(int pin) {
+  int silence = 10;
+  digitalWrite(pin, LOW);
+  delayMicroseconds(silence);
+  
+  digitalWrite(pin, HIGH);
+  delayMicroseconds(PULSE_LENGTH_uS);
+  
+  digitalWrite(pin, LOW);
+  delayMicroseconds(silence);
+}
+
+long getDistance_cm(int pin) {
+  long duration, cm;
+  duration = pulseIn(pin, HIGH);
+  // The speed of sound is: 343m/s = 0.0343 cm/uS = 1/29.1 cm/uS
+  cm = (duration / 2) / 29.1;
+  return cm;
+}
+
+// Check if the sensor was tripped at either the top of bottom sensor.
+// Returns:
+//   +1 if top sensor was tripped
+//   -1 if bottom sensor was tripped
+//    0 if neither were tripped
+int is_tripped() {
+  if (SENSOR_TYPE == ULTRASONIC_SENSOR) {
+    long distancecmTop, distancecmBot;
+    sendPulse(trigPinTop);
+    distancecmTop = getDistance_cm(echoPinTop);  
+    DEBUG_PRINT ("Top Distance = " + String(distancecmTop) + " cm");
+    
+    sendPulse(trigPinBot);
+    distancecmBot = getDistance_cm(echoPinBot);  
+    DEBUG_PRINT ("Bottom Distance = " + String(distancecmBot) + " cm");
+      
+    if (distancecmTop < TRIGGER_DISTANCE_TOP_CM) {
+      return 1;
+    } else if (distancecmBot < TRIGGER_DISTANCE_BOT_CM) {
+      return -1;
+    } else {
+      return 0;
+    };     
+  } else if (SENSOR_TYPE == PIR_SENSOR) {
+    int top, bot;
+    top = digitalRead(PIRPinTop);
+    DEBUG_PRINT ("Top PIR reading = " + String(top));
+    bot = digitalRead(PIRPinBot);
+    DEBUG_PRINT ("Bot PIR reading = " + String(bot));
+    if (top > 0) {
+      return 1;
+    } else if (bot > 0) {
+      return -1;
+    } else {
+      return 0;
+    }
+  }
+
 }
