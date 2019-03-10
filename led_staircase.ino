@@ -21,14 +21,15 @@ const int ULTRASONIC_SENSOR = 1;
 /************************************************\
                     CONFIG
 \*************************************************/
-const int STAY_ON_TIME_SEC         = 10;        // How long to stay on before ramp down sequence
+const int STAY_ON_TIME_SEC         = 8;        // How long to stay on before ramp down sequence
 const int STEP_DELAY_MILLISEC      = 0;         // Delay between steps turning on
-const int RAMP_DELAY_UP_MILLISEC   = 10;        // How long between LED brightness increases
-const int RAMP_DELAY_DOWN_MILLISEC = 10;        // How long between LED brightness decreases
+const int RAMP_DELAY_UP_MILLISEC   = 2;        // How long between LED brightness increases
+const int RAMP_DELAY_DOWN_MILLISEC = 2;        // How long between LED brightness decreases
 const int RAMP_FUNC                = QUADRATIC; // Ramping function
 const int RAMP_UP_STEP             = 1;         // How much to increase brightness on each step 
 const int RAMP_DOWN_STEP           = 1;         // How much to decrease brightness on each step
 const int OVERLAP                  = 3;         // The amount of overlapping between stairs turning on/off
+const int MAX_PROGRESS             = 255;       // The amount of iterations of brightness for each step
 
 const float MAX_BRIGHTNESS_PERCENT = 1.0;       // Maximum brightness reached by the LEDs
 const float MIN_BRIGHTNESS_PERCENT = 0;         // Minimum brightness reached by the LEDs
@@ -68,6 +69,8 @@ const int STAIR_10 = 11;
 const int STAIR_11 = 12;
 const int STAIR_12 = 13;
 
+// const int N_STAIRS = 3;
+// int STAIRS[N_STAIRS] = {STAIR_01, STAIR_02, STAIR_03};
 const int N_STAIRS = 12;
 int STAIRS[N_STAIRS] = {STAIR_01, STAIR_02, STAIR_03, STAIR_04, STAIR_05, STAIR_06, STAIR_07, STAIR_08, STAIR_09, STAIR_10, STAIR_11, STAIR_12};
 int TOP_STAIR = STAIRS[0];
@@ -75,11 +78,17 @@ int BOTTOM_STAIR = STAIRS[N_STAIRS-1];
 
 
 
+int stairsForward[N_STAIRS], stairsReversed[N_STAIRS];
+
 /************************************************\
                     SETUP
 \*************************************************/
 void setup() {
-  delay(1000);
+  
+  for (int ii=0; ii < N_STAIRS; ii++) {
+    stairsForward[ii] = STAIRS[ii];
+    stairsReversed[ii] = STAIRS[N_STAIRS-1-ii];
+  }
   
   #ifdef DEBUG
   Serial.begin(9600);
@@ -108,6 +117,8 @@ void setup() {
 
 void loop() {
   int trip;
+  int stairs;  
+  int sleep, sleepCheck=10;
 
   trip = is_tripped();
   
@@ -116,21 +127,31 @@ void loop() {
     // Set the direction in which the LEDS turn on
     if (trip > 0) {
       DEBUG_PRINT ("Starting sequence from Top Stair");    
+      stairs = stairsForward;
+
     } else {
       DEBUG_PRINT ("Starting sequence from Bottom Stair");    
+      stairs = stairsReversed;
     }
  
-    rampUpFlight();
-    
-    delay(1000 * STAY_ON_TIME_SEC);
-    
-    rampDownFlight();
+    rampUpFlight(stairs);
+    sleep = 0;
+    while (sleep < STAY_ON_TIME_SEC*1000) {
+      delay(sleepCheck);
+      if (is_tripped() != 0) {
+        sleep=0;
+      }
+      sleep += sleepCheck;
+    }
+
+    rampDownFlight(stairs);
  
     DEBUG_PRINT ("Finished sequence");
   } else {
     DEBUG_PRINT ("No input detected");
   };
-
+  
+  delay(20);
 }
 
 
@@ -146,12 +167,60 @@ bool _rampDownDone(int ii, int extent) {
   return ii > extent;
 }
 
+
 // Iterate over a group of stairs like a box-car filter, incrementing or decrementing
 // their brightness
-void _rampFlight(int direction) {
+void _rampFlight(int direction, int* stairs) {
+  int progress_overlap = MAX_PROGRESS / OVERLAP;
+  int extent = (N_STAIRS+OVERLAP)*MAX_PROGRESS;
+  int ii, progress, upto, gofrom, sleep;
+  
+    if (direction > 0) {
+    ii = 0;
+    sleep= RAMP_DELAY_UP_MILLISEC;
+  } else if (direction < 0) {
+    sleep = RAMP_DELAY_DOWN_MILLISEC;
+  }
+  
+  while (ii < extent) {
+    
+    upto = (ii / progress_overlap);
+    gofrom = upto - OVERLAP;
+    if (gofrom < 0) {
+      gofrom = 0;
+    }
+    if (upto > N_STAIRS-1) {
+      upto = N_STAIRS-1;
+    }
+    
+    for (int step=gofrom; step <= upto; step++) {
+      progress = ii - step * progress_overlap;
+      if (direction < 0) {
+        progress = MAX_PROGRESS - progress;
+      }
+
+      if ((progress < 0) || (progress > MAX_PROGRESS)) {
+        continue;
+      }
+
+      setBrightness(stairs[step], progress);  
+      delay(sleep);    
+      
+    }
+    
+    ii++;
+  }
+
+  
+}
+
+
+// Iterate over a group of stairs like a box-car filter, incrementing or decrementing
+// their brightness
+void _rampFlight2(int direction, int* stairs) {
   bool (*iterating)(int, int) ;
-  int brightness_overlap = 100 / OVERLAP;
-  int extent = (N_STAIRS+OVERLAP)*100;
+  int brightness_overlap = MAX_PROGRESS / OVERLAP;
+  int extent = (N_STAIRS+OVERLAP)*MAX_PROGRESS;
   int ii, end, brightness, upto, gofrom, sleep;
   
   
@@ -163,7 +232,7 @@ void _rampFlight(int direction) {
     direction = RAMP_UP_STEP;
   } else if (direction < 0) {
     ii = extent;
-    end = N_STAIRS * 100 -  extent;
+    end = N_STAIRS * MAX_PROGRESS -  extent;
     iterating = _rampDownDone;
     sleep = RAMP_DELAY_DOWN_MILLISEC;
     direction = -RAMP_DOWN_STEP;
@@ -183,11 +252,11 @@ void _rampFlight(int direction) {
     for (int step=gofrom; step <= upto; step++) {
       brightness = ii - step * brightness_overlap;
 
-      if ((brightness < 0) || (brightness > 100)) {
+      if ((brightness < 0) || (brightness > MAX_PROGRESS)) {
         continue;
       }
 
-      setBrightness(STAIRS[step], brightness);  
+      setBrightness(stairs[step], brightness);  
       delay(sleep);    
       
     }
@@ -199,12 +268,12 @@ void _rampFlight(int direction) {
 }
 
 
-void rampUpFlight() {
-  _rampFlight(1);
+void rampUpFlight(int* stairs) {
+  _rampFlight(1, stairs);
 }
 
-void rampDownFlight() {
-  _rampFlight(-1);
+void rampDownFlight(int* stairs) {
+  _rampFlight(-1, stairs);
 }
 
 
@@ -212,8 +281,8 @@ void setBrightness(int pin, int progress) {
   int pwm_value, _max;
   if (progress < 0) {
     progress = 0;
-  } else if (progress > 100) {
-    progress = 100;
+  } else if (progress > MAX_PROGRESS) {
+    progress = MAX_PROGRESS;
   }
   
   _max = MAX_BRIGHTNESS_PERCENT * 255;
@@ -232,18 +301,18 @@ void setBrightness(int pin, int progress) {
 }
 
 int quadratic_func(int progress, int scale) {
-   float q = float(progress) / 100.0;
+   float q = float(progress) / MAX_PROGRESS;
    return q*q * scale;
 }
 
 int tapered_func(int progress, int scale) {
-   float q = float(progress) / 100.0;
+   float q = float(progress) / MAX_PROGRESS;
    return (3*q*q - 2 * q*q*q) * scale;
 }
 
 int linear_func(int progress, int scale) {
   int y;
-  y = map(progress, 0, 100, 0, scale);     
+  y = map(progress, 0, MAX_PROGRESS, 0, scale);     
   return y;
 }
 
